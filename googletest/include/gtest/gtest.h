@@ -1751,6 +1751,7 @@ class TestWithParam : public Test, public WithParamInterface<T> {};
 // generic name and clashes with some other libraries.
 #if !(defined(GTEST_DONT_DEFINE_FAIL) && GTEST_DONT_DEFINE_FAIL)
 #define FAIL() GTEST_FAIL()
+#define FAIL_AT(file, line) GTEST_FAIL_AT(file, line)
 #endif
 
 // Generates a success with a generic message.
@@ -2307,7 +2308,8 @@ TestInfo* RegisterTest(const char* test_suite_name, const char* test_name,
 // tests are successful, or 1 otherwise.
 //
 // RUN_ALL_TESTS() should be invoked after the command line has been
-// parsed by InitGoogleTest().
+// parsed by InitGoogleTest(). RUN_ALL_TESTS will tear down and delete any
+// installed environments and should only be called once per binary.
 //
 // This function was formerly a macro; thus, it is in the global
 // namespace and has an all-caps name.

@@ -162,6 +162,10 @@
 #define GTEST_HAS_BUILTIN(x) 0
 #endif  // defined(__has_builtin)
 
+#if defined(GTEST_HAS_ABSL) && !defined(GTEST_NO_ABSL_FLAGS)
+#define GTEST_HAS_ABSL_FLAGS
+#endif
+
 namespace testing {
 
 using internal::CountIf;
@@ -447,6 +451,19 @@ static bool ShouldRunTestSuite(const TestSuite* test_suite) {
   return test_suite->should_run();
 }
 
+namespace {
+
+// Returns true if test part results of type `type` should include a stack
+// trace.
+bool ShouldEmitStackTraceForResultType(TestPartResult::Type type) {
+  // Suppress emission of the stack trace for SUCCEED() since it likely never
+  // requires investigation, and GTEST_SKIP() since skipping is an intentional
+  // act by the developer rather than a failure requiring investigation.
+  return type != TestPartResult::kSuccess && type != TestPartResult::kSkip;
+}
+
+}  // namespace
+
 // AssertHelper constructor.
 AssertHelper::AssertHelper(TestPartResult::Type type, const char* file,
                            int line, const char* message)
@@ -459,7 +476,9 @@ void AssertHelper::operator=(const Message& message) const {
   UnitTest::GetInstance()->AddTestPartResult(
       data_->type, data_->file, data_->line,
       AppendUserMessage(data_->message, message),
-      UnitTest::GetInstance()->impl()->CurrentOsStackTraceExceptTop(1)
+      ShouldEmitStackTraceForResultType(data_->type)
+          ? UnitTest::GetInstance()->impl()->CurrentOsStackTraceExceptTop(1)
+          : ""
       // Skips the stack frame for this function itself.
   );  // NOLINT
 }
@@ -517,7 +536,8 @@ void InsertSyntheticTestCase(const std::string& name, CodeLocation location,
   if (ignored.find(name) != ignored.end()) return;
 
   const char kMissingInstantiation[] =  //
-      " is defined via TEST_P, but never instantiated. None of the test cases "
+      " is defined via TEST_P, but never instantiated. None of the test "
+      "cases "
       "will run. Either no INSTANTIATE_TEST_SUITE_P is provided or the only "
       "ones provided expand to nothing."
       "\n\n"
@@ -596,10 +616,12 @@ void TypeParameterizedTestSuiteRegistry::CheckForInstantiations() {
         "\n\n"
         "Ideally, TYPED_TEST_P definitions should only ever be included as "
         "part of binaries that intend to use them. (As opposed to, for "
-        "example, being placed in a library that may be linked in to get other "
+        "example, being placed in a library that may be linked in to get "
+        "other "
         "utilities.)"
         "\n\n"
-        "To suppress this error for this test suite, insert the following line "
+        "To suppress this error for this test suite, insert the following "
+        "line "
         "(in a non-header) in the namespace it is defined in:"
         "\n\n"
         "GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(" +
@@ -3283,11 +3305,9 @@ static void ColoredPrintf(GTestColor color, const char* fmt, ...) {
   va_start(args, fmt);
 
   static const bool in_color_mode =
-#if GTEST_HAS_FILE_SYSTEM
+      // We don't condition this on GTEST_HAS_FILE_SYSTEM because we still need
+      // to be able to detect terminal I/O regardless.
       ShouldUseColor(posix::IsATTY(posix::FileNo(stdout)) != 0);
-#else
-      false;
-#endif  // GTEST_HAS_FILE_SYSTEM
 
   const bool use_color = in_color_mode && (color != GTestColor::kDefault);
 
@@ -5974,6 +5994,12 @@ bool UnitTestImpl::RunAllTests() {
   }
 
   repeater->OnTestProgramEnd(*parent_);
+  // Destroy environments in normal code, not in static teardown.
+  bool delete_environment_on_teardown = true;
+  if (delete_environment_on_teardown) {
+    ForEach(environments_, internal::Delete<Environment>);
+    environments_.clear();
+  }
 
   if (!gtest_is_initialized_before_run_all_tests) {
     ColoredPrintf(
@@ -6203,8 +6229,8 @@ void UnitTestImpl::ListTestsMatchingFilter() {
 #if GTEST_HAS_FILE_SYSTEM
   const std::string& output_format = UnitTestOptions::GetOutputFormat();
   if (output_format == "xml" || output_format == "json") {
-    FILE* fileout = OpenFileForWriting(
-        UnitTestOptions::GetAbsolutePathToOutputFile().c_str());
+    FILE* fileout =
+        OpenFileForWriting(UnitTestOptions::GetAbsolutePathToOutputFile());
     std::stringstream stream;
     if (output_format == "xml") {
       XmlUnitTestResultPrinter(
@@ -6685,7 +6711,7 @@ void ParseGoogleTestFlagsOnlyImpl(int* argc, CharType** argv) {
 // remain in place. Unrecognized flags are not reported and do not cause the
 // program to exit.
 void ParseGoogleTestFlagsOnly(int* argc, char** argv) {
-#ifdef GTEST_HAS_ABSL
+#ifdef GTEST_HAS_ABSL_FLAGS
   if (*argc <= 0) return;
 
   std::vector<char*> positional_args;
@@ -6771,11 +6797,13 @@ void InitGoogleTestImpl(int* argc, CharType** argv) {
 #ifdef GTEST_HAS_ABSL
   absl::InitializeSymbolizer(g_argvs[0].c_str());
 
+#ifdef GTEST_HAS_ABSL_FLAGS
   // When using the Abseil Flags library, set the program usage message to the
   // help message, but remove the color-encoding from the message first.
   absl::SetProgramUsageMessage(absl::StrReplaceAll(
       kColorEncodedHelpMessage,
       {{"@D", ""}, {"@R", ""}, {"@G", ""}, {"@Y", ""}, {"@@", "@"}}));
+#endif  // GTEST_HAS_ABSL_FLAGS
 #endif  // GTEST_HAS_ABSL
 
   ParseGoogleTestFlagsOnly(argc, argv);
